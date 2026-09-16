@@ -1,0 +1,14 @@
+/build/
+/dist/
+/test-output/
+/参考/
+/data/
+/.vs/
+*.user
+/third_party/downloads/
+/third_party/libwebp-*/
+/third_party/7zip-bin/
+/third_party/7zip/
+/third_party/libwebp/
+/third_party/sqlite/
+__pycache__/

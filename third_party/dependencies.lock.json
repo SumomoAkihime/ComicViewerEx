@@ -1,0 +1,26 @@
+{
+  "7zip-source": {
+    "version": "26.03",
+    "url": "https://www.7-zip.org/a/7z2603-src.7z",
+    "sha256": "41e2a7c0e9f838351c625e01f0f581a2188bb3dda10c8e0b4a852da26546ffe2",
+    "file": "7z2603-src.7z"
+  },
+  "7zip-bin": {
+    "version": "26.03",
+    "url": "https://www.7-zip.org/a/7z2603-x64.exe",
+    "sha256": "0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd",
+    "file": "7z2603-x64.exe"
+  },
+  "sqlite": {
+    "version": "3.53.4",
+    "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+    "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+    "file": "sqlite-amalgamation-3530400.zip"
+  },
+  "libwebp": {
+    "version": "1.6.0",
+    "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
+    "sha256": "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564",
+    "file": "libwebp-1.6.0.tar.gz"
+  }
+}
