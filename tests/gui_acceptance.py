@@ -29,6 +29,11 @@ user.PostMessageW.argtypes = [w.HWND,w.UINT,w.WPARAM,w.LPARAM]
 user.GetWindowTextW.argtypes = [w.HWND,w.LPWSTR,c.c_int]
 user.SetWindowTextW.argtypes = [w.HWND,w.LPCWSTR]
 user.GetWindowRect.argtypes = [w.HWND,c.POINTER(w.RECT)]
+user.GetClientRect.argtypes = [w.HWND,c.POINTER(w.RECT)]
+user.ClientToScreen.argtypes = [w.HWND,c.POINTER(w.POINT)]
+user.GetCursorPos.argtypes = [c.POINTER(w.POINT)]
+user.SetCursorPos.argtypes = [c.c_int,c.c_int]
+user.GetDlgCtrlID.argtypes = [w.HWND]
 user.PrintWindow.argtypes = [w.HWND,w.HDC,w.UINT]
 user.GetDC.argtypes = [w.HWND]; user.GetDC.restype = w.HDC
 user.ReleaseDC.argtypes = [w.HWND,w.HDC]
@@ -104,6 +109,8 @@ class App:
         self.startup_ms=(time.perf_counter()-start)*1000
         self.status=wait_for(lambda: next((h for h,name in windows(self.process.pid,self.hwnd) if name=='msctls_statusbar32'),None))
     def command(self,id): user.PostMessageW(self.hwnd,0x111,id,0)
+    def control(self,id):
+        return next(h for h,_ in windows(self.process.pid,self.hwnd) if user.GetDlgCtrlID(h)==id)
     def page(self,n):
         return wait_for(lambda: text(self.status) if text(self.status).startswith(f'第 {n} ') or text(self.status).startswith(f'第 {n}–') else None)
     def close(self):
@@ -116,13 +123,46 @@ class App:
         time.sleep(.1)
         return handle
 
+def check_canvas_interactions(active,canvas,results):
+    """向本程序的画布发送鼠标消息，检查短按、拖动与双击的行为差异。"""
+    area=w.RECT(); user.GetClientRect(canvas,c.byref(area))
+    left=(area.right//4,area.bottom//2); right=(area.right*3//4,area.bottom//2)
+    def mouse(message,point,keys=0):
+        if message in (0x0201,0x0203):
+            screen=w.POINT(*point); user.ClientToScreen(canvas,c.byref(screen)); user.SetCursorPos(screen.x,screen.y)
+        user.SendMessageW(canvas,message,keys,(point[0]&0xFFFF)|((point[1]&0xFFFF)<<16))
+    def click(point,down=0x0201):
+        mouse(down,point,1); mouse(0x0202,point)
+    click(right); active.page(2)
+    click(left); active.page(1)
+    mouse(0x0201,right,1); mouse(0x0200,(right[0]+1,right[1]),1); mouse(0x0202,right); active.page(2)
+    mouse(0x0201,right,1); mouse(0x0200,(right[0]-80,right[1]-40),1); mouse(0x0202,(right[0]-80,right[1]-40))
+    if not text(active.status).startswith('第 2 '): raise RuntimeError('拖动松开时误翻页')
+    before=w.RECT(); user.GetWindowRect(active.hwnd,c.byref(before))
+    click(right); active.page(3); click(right,0x0203); active.page(4)
+    after=w.RECT(); user.GetWindowRect(active.hwnd,c.byref(after))
+    if bytes(before)!=bytes(after): raise RuntimeError('左键双击仍触发全屏')
+    user.SendMessageW(active.hwnd,0x111,208,0)
+    click(right); active.page(5)
+    user.SendMessageW(active.hwnd,0x111,208,0)
+    for _ in range(4): click(left)
+    active.page(1)
+    mouse(0x0207,right,0x10); mouse(0x0208,right)
+    fullscreen=w.RECT(); user.GetWindowRect(active.hwnd,c.byref(fullscreen))
+    if bytes(before)==bytes(fullscreen): raise RuntimeError('中键未进入全屏')
+    mouse(0x0207,right,0x10); mouse(0x0208,right)
+    restored=w.RECT(); user.GetWindowRect(active.hwnd,c.byref(restored))
+    if bytes(before)!=bytes(restored): raise RuntimeError('中键未恢复窗口')
+    results['tests'].append('画布左右点击、轻微移动、拖动不翻页、双击翻页、固定方向和中键全屏通过')
+
 def main():
     OUT.mkdir(parents=True)
     for name in ['ComicViewerEx.exe','7z.dll']: shutil.copy2(ROOT/'build/Release'/name,OUT/name)
     results={'system':{'windows':str(subprocess.check_output(['cmd','/c','ver']).decode('utf-8',errors='replace').strip())},'startup_ms':[],'tests':[]}
     active=None
+    saved_cursor=w.POINT(); user.GetCursorPos(c.byref(saved_cursor))
     try:
-        active=App(); results['startup_ms'].append(round(active.startup_ms,2)); time.sleep(.3)
+        active=App(); results['startup_ms'].append(round(active.startup_ms,2)); time.sleep(3)
         results['idle']=memory(active.process.pid); screenshot(active.hwnd,OUT/'01-empty.png'); active.close(); active=None
         for i in range(3):
             active=App(); results['startup_ms'].append(round(active.startup_ms,2)); active.close(); active=None
@@ -130,6 +170,7 @@ def main():
         results['reading']=memory(active.process.pid); screenshot(active.hwnd,OUT/'02-reading.png')
         cached=[]
         canvas=next(h for h,name in windows(active.process.pid,active.hwnd) if name=='ComicViewerEx.Canvas')
+        check_canvas_interactions(active,canvas,results)
         for i in range(10):
             start=time.perf_counter(); active.command(204 if i%2==0 else 203); active.page(2 if i%2==0 else 1)
             user.SendMessageW(canvas,0x000F,0,0)
@@ -156,22 +197,48 @@ def main():
         active.command(207); active.page(1); active.command(204); active.page(2); active.command(204); active.page(3)
         active.command(204); wait_for(lambda:'后半页' in text(active.status)); screenshot(active.hwnd,OUT/'05-split.png')
         active.command(203); wait_for(lambda:'前半页' in text(active.status))
-        # Create a tag with the real input dialog; selection alone must not filter the file list.
+        # 打标与筛选使用两个独立勾选列表；一个文件可以同时添加多个标签。
         active.command(220); dialog=active.dialog(); value=c.create_unicode_buffer('验收标签')
         user.SendMessageW(user.GetDlgItem(dialog,1002),0x000C,0,c.addressof(value)); user.PostMessageW(dialog,0x111,1,0)
-        tags=user.GetDlgItem(active.hwnd,230); files=user.GetDlgItem(active.hwnd,231)
-        wait_for(lambda:user.SendMessageW(tags,0x018B,0,0)==1) # LB_GETCOUNT
+        tags=active.control(230); files=active.control(231); tag_tabs=active.control(235); filters=active.control(236)
+        wait_for(lambda:user.SendMessageW(tags,0x1004,0,0)==1) # LVM_GETITEMCOUNT
+        user.SendMessageW(tag_tabs,0x0100,0x27,0) # 右方向键切到“打标”页签
+        wait_for(lambda:user.SendMessageW(tag_tabs,0x130B,0,0)==1) # TCM_GETCURSEL
         count_before=user.SendMessageW(files,0x1004,0,0)
-        user.SendMessageW(tags,0x0185,1,0) # LB_SETSEL
+        user.SendMessageW(tags,0x0100,0x24,0); user.SendMessageW(tags,0x0100,0x20,0) # Home、空格勾选
+        if user.SendMessageW(files,0x1004,0,0)!=count_before: raise RuntimeError('打标勾选误触发筛选')
         # The first list row can be selected via native keyboard navigation, without remote pointers.
         user.SendMessageW(files,0x0100,0x24,0) # WM_KEYDOWN VK_HOME
         wait_for(lambda:user.SendMessageW(files,0x1032,0,0)>0) # LVM_GETSELECTEDCOUNT
         active.command(223)
         wait_for(lambda: sqlite_count(OUT/'data/library.db','book_tags')==1)
-        active.command(233); wait_for(lambda:user.SendMessageW(files,0x1004,0,0)==1)
+        active.command(220); dialog=active.dialog(); value=c.create_unicode_buffer('验收标签二')
+        user.SendMessageW(user.GetDlgItem(dialog,1002),0x000C,0,c.addressof(value)); user.PostMessageW(dialog,0x111,1,0)
+        wait_for(lambda:user.SendMessageW(tags,0x1004,0,0)==2)
+        user.SendMessageW(tags,0x0100,0x23,0); user.SendMessageW(tags,0x0100,0x20,0) # End、空格勾选第二个
+        active.command(223); wait_for(lambda: sqlite_count(OUT/'data/library.db','book_tags')==2)
+        user.SendMessageW(tag_tabs,0x0100,0x25,0)
+        wait_for(lambda:user.SendMessageW(tag_tabs,0x130B,0,0)==0)
+        user.SendMessageW(filters,0x0100,0x24,0); user.SendMessageW(filters,0x0100,0x20,0)
+        wait_for(lambda:user.SendMessageW(files,0x1004,0,0)==1)
         screenshot(active.hwnd,OUT/'06-tags.png'); active.command(225)
         wait_for(lambda:user.SendMessageW(files,0x1004,0,0)==count_before)
-        results['tests'].append('宽图分页前后半页、标签创建/打标/应用筛选/清除筛选通过')
+        if any(user.SendMessageW(tags,0x102C,i,0xF000)!=0x2000 for i in range(2)): raise RuntimeError('清除筛选误清空打标勾选')
+        bar=next(h for h,name in windows(active.process.pid,active.hwnd) if name=='ComicViewerEx.TagBar')
+        user.SendMessageW(bar,0x0100,0x24,0); user.SendMessageW(bar,0x0100,0x0D,0)
+        wait_for(lambda:user.SendMessageW(files,0x1004,0,0)==1)
+        user.SendMessageW(bar,0x0100,0x0D,0)
+        wait_for(lambda:user.SendMessageW(files,0x1004,0,0)==count_before)
+        user.GetDpiForWindow.argtypes=[w.HWND]; user.GetDpiForWindow.restype=w.UINT
+        dpi=user.GetDpiForWindow(active.hwnd)
+        bar_area=w.RECT(); user.GetClientRect(bar,c.byref(bar_area))
+        if bar_area.bottom > round(40*dpi/96): raise RuntimeError('气泡区超过单行高度')
+        point=(round(46*dpi/96)+min(round(280*dpi/96),bar_area.right//3))|((bar_area.bottom//2)<<16)
+        for expected in [1,count_before]:
+            user.SendMessageW(bar,0x0201,1,point); user.SendMessageW(bar,0x0202,0,point)
+            wait_for(lambda:user.SendMessageW(files,0x1004,0,0)==expected)
+        results['tests'].append('标签气泡鼠标点击、键盘激活和筛选同步通过')
+        results['tests'].append('宽图分页、同文件多标签、独立打标、即时筛选和独立清除筛选通过')
         active.close(); active=None
         # Fresh explicit archive verifies a real modal password prompt and persistence.
         active=App(FIX/'encrypted.7z'); dialog=active.dialog()
@@ -185,6 +252,7 @@ def main():
         results['binary_bytes']=(OUT/'ComicViewerEx.exe').stat().st_size+(OUT/'7z.dll').stat().st_size
         results['passed']=True
     finally:
+        user.SetCursorPos(saved_cursor.x,saved_cursor.y)
         if active and active.process.poll() is None:
             results['last_status']=text(active.status)
             screenshot(active.hwnd,OUT/'failure.png')

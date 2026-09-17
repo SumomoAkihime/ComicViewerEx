@@ -12,6 +12,8 @@ public:
     std::string ensureBook(const fs::path& path);
     ReadingState reading(const std::string& book);
     void saveReading(const std::string& book, const ReadingState& state);
+    ReadingPreferences readingPreferences();
+    void saveReadingPreferences(const ReadingPreferences& preferences);
     std::wstring setting(const std::string& key, const std::wstring& fallback = L"");
     void setSetting(const std::string& key, const std::wstring& value);
     std::vector<Tag> tags();
@@ -20,6 +22,7 @@ public:
     void deleteTag(int64_t tag);
     void assignTags(const std::vector<std::string>& books, const std::vector<int64_t>& tags, bool add);
     std::wstring bookTags(const std::string& book);
+    std::vector<Tag> bookTagItems(const std::string& book);
     bool matches(const std::string& book, const std::vector<int64_t>& tags, bool all);
     std::vector<Password> passwords();
     void addPassword(const std::wstring& password);

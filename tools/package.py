@@ -7,7 +7,8 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 DIST=ROOT/'dist'
-NAME='ComicViewerEx-1.0.0-win-x64'
+VERSION='1.1.0'
+NAME=f'ComicViewerEx-{VERSION}-win-x64'
 
 def main():
     portable=DIST/NAME
@@ -19,6 +20,8 @@ def main():
     screenshot=Path('docs/images/reading.png')
     (portable/screenshot).parent.mkdir(parents=True,exist_ok=True)
     shutil.copy2(ROOT/screenshot,portable/screenshot)
+    checklist=Path('docs/交互调整验收.md')
+    shutil.copy2(ROOT/checklist,portable/checklist)
     license_dir=portable/'licenses'; license_dir.mkdir(exist_ok=True)
     shutil.copy2(ROOT/'third_party/7zip-bin/License.txt',license_dir/'7-Zip.txt')
     shutil.copy2(ROOT/'third_party/libwebp/COPYING',license_dir/'libwebp.txt')
@@ -31,6 +34,7 @@ def main():
     # Whitelist only release files. Even if a user has opened this folder, never include data/.
     files=[(portable/name,Path(name)) for name in ['ComicViewerEx.exe','7z.dll','README.md','THIRD_PARTY.md','验收报告.md','RELEASE_NOTES.md']]
     files.append((portable/screenshot,screenshot))
+    files.append((portable/checklist,checklist))
     files += [(file,Path('licenses')/file.name) for file in license_dir.iterdir() if file.is_file()]
     zip_files(DIST/(NAME+'.zip'),files,NAME+'/')
     source=[]
@@ -40,8 +44,8 @@ def main():
                 source.append((file,file.relative_to(ROOT)))
     for name in ['CMakeLists.txt','README.md','THIRD_PARTY.md','验收报告.md','RELEASE_NOTES.md','AGENTS.md','.gitignore','third_party/dependencies.lock.json','third_party/7zip-bin/7z.dll','third_party/7zip-bin/7z.exe','third_party/7zip-bin/License.txt']:
         source.append((ROOT/name,Path(name)))
-    zip_files(DIST/'ComicViewerEx-1.0.0-source.zip',source,'ComicViewerEx/')
-    checksums={file.name:hashlib.sha256(file.read_bytes()).hexdigest() for file in [DIST/(NAME+'.zip'),DIST/'ComicViewerEx-1.0.0-source.zip']}
+    zip_files(DIST/f'ComicViewerEx-{VERSION}-source.zip',source,'ComicViewerEx/')
+    checksums={file.name:hashlib.sha256(file.read_bytes()).hexdigest() for file in [DIST/(NAME+'.zip'),DIST/f'ComicViewerEx-{VERSION}-source.zip']}
     (DIST/'SHA256.json').write_text(json.dumps(checksums,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({file.name:file.stat().st_size for file in DIST.glob('*.zip')},ensure_ascii=False,indent=2))
 

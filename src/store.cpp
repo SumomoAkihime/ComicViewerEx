@@ -6,6 +6,7 @@
 #include <sqlite3.h>
 #endif
 
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <system_error>
@@ -162,6 +163,71 @@ void requireTag(sqlite3* db, int64_t tag)
     const int result = statement.step();
     if (result != SQLITE_ROW || sqlite3_column_int(statement.get(), 0) == 0)
         throw std::runtime_error("标签不存在");
+}
+
+constexpr const char* ReadingModeSetting = "reading.mode";
+constexpr const char* ReadingFitSetting = "reading.fit";
+constexpr const char* ReadingRtlSetting = "reading.rtl";
+
+struct StoredReadingPreferences {
+    ReadingPreferences value;
+    bool complete{};
+};
+
+bool parseInteger(const std::string& text, int& value)
+{
+    if (text.empty()) return false;
+    const char* first = text.data();
+    const char* last = first + text.size();
+    const auto result = std::from_chars(first, last, value);
+    return result.ec == std::errc{} && result.ptr == last;
+}
+
+StoredReadingPreferences storedReadingPreferences(sqlite3* db)
+{
+    StoredReadingPreferences result;
+    bool modePresent = false;
+    bool fitPresent = false;
+    bool rtlPresent = false;
+    Statement statement(db, "SELECT key,value FROM settings WHERE key IN ('reading.mode','reading.fit','reading.rtl')",
+                        "读取全局阅读偏好失败");
+    while (statement.step() == SQLITE_ROW) {
+        const std::string key = columnText(statement.get(), 0);
+        const std::string value = columnText(statement.get(), 1);
+        int parsed = 0;
+        if (key == ReadingModeSetting) {
+            modePresent = true;
+            if (!parseInteger(value, parsed) || parsed < 0 || parsed > 2) parsed = 0;
+            result.value.mode = parsed;
+        } else if (key == ReadingFitSetting) {
+            fitPresent = true;
+            if (!parseInteger(value, parsed) || parsed < 0 || parsed > 3) parsed = 0;
+            result.value.fit = parsed;
+        } else if (key == ReadingRtlSetting) {
+            rtlPresent = true;
+            if (!parseInteger(value, parsed) || (parsed != 0 && parsed != 1)) parsed = 0;
+            result.value.rtl = parsed != 0;
+        }
+    }
+    result.complete = modePresent && fitPresent && rtlPresent;
+    return result;
+}
+
+ReadingPreferences legacyReadingPreferences(sqlite3* db)
+{
+    ReadingPreferences result;
+    // 仅查旧数据库，不要求上次阅读的文件仍在磁盘上。
+    Statement statement(db, "SELECT r.mode,r.fit,r.rtl FROM settings s "
+                            "JOIN books b ON b.path=s.value JOIN reading r ON r.book_id=b.id "
+                            "WHERE s.key='lastBook' LIMIT 1", "读取旧阅读偏好失败");
+    if (statement.step() != SQLITE_ROW) return result;
+    const int mode = sqlite3_column_int(statement.get(), 0);
+    const int fit = sqlite3_column_int(statement.get(), 1);
+    const int rtl = sqlite3_column_int(statement.get(), 2);
+    result.mode = mode >= 0 && mode <= 2 ? mode : 0;
+    result.fit = fit >= 0 && fit <= 3 ? fit : 0;
+    result.rtl = rtl == 1;
+    return result;
 }
 
 } // namespace
@@ -326,6 +392,39 @@ void Store::saveReading(const std::string& book, const ReadingState& state)
     statement.step();
 }
 
+ReadingPreferences Store::readingPreferences()
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto stored = storedReadingPreferences(db_);
+    if (stored.complete) return stored.value;
+
+    const ReadingPreferences migrated = legacyReadingPreferences(db_);
+    saveReadingPreferences(migrated);
+    return migrated;
+}
+
+void Store::saveReadingPreferences(const ReadingPreferences& preferences)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ReadingPreferences normalized = preferences;
+    if (normalized.mode < 0 || normalized.mode > 2) normalized.mode = 0;
+    if (normalized.fit < 0 || normalized.fit > 3) normalized.fit = 0;
+
+    Transaction transaction(db_);
+    const char* sql = "INSERT INTO settings(key,value) VALUES(?1,?2) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value";
+    const auto save = [&](const char* key, int value) {
+        Statement statement(db_, sql, "保存全局阅读偏好失败");
+        statement.bindText(1, key);
+        statement.bindText(2, std::to_string(value));
+        statement.step();
+    };
+    save(ReadingModeSetting, normalized.mode);
+    save(ReadingFitSetting, normalized.fit);
+    save(ReadingRtlSetting, normalized.rtl ? 1 : 0);
+    transaction.commit();
+}
+
 std::wstring Store::setting(const std::string& key, const std::wstring& fallback)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -412,17 +511,24 @@ void Store::assignTags(const std::vector<std::string>& books, const std::vector<
     transaction.commit();
 }
 
-std::wstring Store::bookTags(const std::string& book)
+std::vector<Tag> Store::bookTagItems(const std::string& book)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    Statement statement(db_, "SELECT t.name FROM tags t JOIN book_tags bt ON bt.tag_id=t.id "
+    Statement statement(db_, "SELECT t.id,t.name FROM tags t JOIN book_tags bt ON bt.tag_id=t.id "
                              "WHERE bt.book_id=?1 ORDER BY t.name COLLATE NOCASE,t.id",
                         "读取书籍标签失败");
     statement.bindText(1, book);
+    std::vector<Tag> result;
+    while (statement.step() == SQLITE_ROW) result.push_back({sqlite3_column_int64(statement.get(), 0), wide(columnText(statement.get(), 1))});
+    return result;
+}
+
+std::wstring Store::bookTags(const std::string& book)
+{
     std::wstring result;
-    while (statement.step() == SQLITE_ROW) {
+    for (const auto& tag : bookTagItems(book)) {
         if (!result.empty()) result += L", ";
-        result += wide(columnText(statement.get(), 0));
+        result += tag.name;
     }
     return result;
 }

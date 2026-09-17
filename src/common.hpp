@@ -41,6 +41,18 @@ struct ReadingState {
     bool rtl{};
     double zoom{1.0};
 };
+struct ReadingPreferences {
+    int mode{}, fit{};
+    bool rtl{};
+
+    void apply(ReadingState& state) const
+    {
+        state.mode = mode;
+        state.fit = fit;
+        state.rtl = rtl;
+        if (mode != 2) state.half = 0;
+    }
+};
 struct BookRow { std::string id; fs::path path; uint64_t size{}; std::wstring tags; };
 struct Tag { int64_t id{}; std::wstring name; };
 struct Password { int64_t id{}; std::wstring value; };
